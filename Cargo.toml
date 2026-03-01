@@ -1,0 +1,9 @@
+[package]
+name = "binary-gui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.31"
+memmap2 = "0.9"
+rfd = "0.15"
