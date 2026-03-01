@@ -1,5 +1,6 @@
 mod app;
 mod file_handler;
+mod stride_detect;
 mod sync_search;
 mod viewer;
 
@@ -9,7 +10,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "Binary Data Viewer",
+        "Grain",
         options,
         Box::new(|_cc| Ok(Box::new(app::App::default()))),
     )

@@ -1,9 +1,12 @@
 [package]
-name = "binary-gui"
+name = "grain"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
+description = "A binary data visualizer for reverse-engineering protocols and file formats"
 
 [dependencies]
-eframe = "0.31"
+eframe = "0.33"
 memmap2 = "0.9"
-rfd = "0.15"
+rfd = "0.17"
+thiserror = "2"

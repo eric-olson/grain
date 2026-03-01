@@ -1,5 +1,17 @@
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::Arc;
 use std::thread;
+
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ParseHexError {
+    #[error("Hex string must have even length")]
+    OddLength,
+
+    #[error("Invalid hex digit: {0}")]
+    InvalidDigit(#[from] std::num::ParseIntError),
+}
 
 #[derive(Clone, Debug)]
 pub enum Variation {
@@ -29,24 +41,31 @@ pub struct SearchMatch {
 }
 
 pub struct SearchState {
-    pub results: Arc<Mutex<Vec<SearchMatch>>>,
-    pub done: Arc<Mutex<bool>>,
+    rx: Receiver<Vec<SearchMatch>>,
+}
+
+impl SearchState {
+    /// Check if results are ready. Returns `Some(results)` when the background
+    /// thread has finished, `None` while still running.
+    pub fn poll(&self) -> Option<Vec<SearchMatch>> {
+        match self.rx.try_recv() {
+            Ok(results) => Some(results),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(Vec::new()),
+        }
+    }
 }
 
 /// Parse a hex string like "1ACFFC1D" into bytes.
-pub fn parse_hex_pattern(s: &str) -> Result<Vec<u8>, String> {
+pub fn parse_hex_pattern(s: &str) -> Result<Vec<u8>, ParseHexError> {
     let s = s.trim().replace(' ', "");
-    if s.len() % 2 != 0 {
-        return Err("Hex string must have even length".to_string());
+    if !s.len().is_multiple_of(2) {
+        return Err(ParseHexError::OddLength);
     }
     (0..s.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| e.to_string()))
+        .map(|i| Ok(u8::from_str_radix(&s[i..i + 2], 16)?))
         .collect()
-}
-
-fn reverse_bits(b: u8) -> u8 {
-    b.reverse_bits()
 }
 
 fn generate_variations(pattern: &[u8]) -> Vec<(Vec<u8>, Variation)> {
@@ -57,11 +76,11 @@ fn generate_variations(pattern: &[u8]) -> Vec<(Vec<u8>, Variation)> {
     variations.push((inverted, Variation::BitInverted));
 
     // Bit-reversed (each byte)
-    let reversed: Vec<u8> = pattern.iter().map(|b| reverse_bits(*b)).collect();
+    let reversed: Vec<u8> = pattern.iter().map(|b| b.reverse_bits()).collect();
     variations.push((reversed, Variation::BitReversed));
 
     // 16-bit byte swap
-    if pattern.len() >= 2 && pattern.len() % 2 == 0 {
+    if pattern.len() >= 2 && pattern.len().is_multiple_of(2) {
         let mut swapped = pattern.to_vec();
         for chunk in swapped.chunks_exact_mut(2) {
             chunk.swap(0, 1);
@@ -70,7 +89,7 @@ fn generate_variations(pattern: &[u8]) -> Vec<(Vec<u8>, Variation)> {
     }
 
     // 32-bit byte swap
-    if pattern.len() >= 4 && pattern.len() % 4 == 0 {
+    if pattern.len() >= 4 && pattern.len().is_multiple_of(4) {
         let mut swapped = pattern.to_vec();
         for chunk in swapped.chunks_exact_mut(4) {
             chunk.reverse();
@@ -95,31 +114,25 @@ fn find_all(data: &[u8], pattern: &[u8]) -> Vec<usize> {
     offsets
 }
 
-/// Launch a background search. Returns a SearchState to poll for results.
+/// Launch a background search. Returns a [`SearchState`] to poll for results.
 pub fn search_background(data: Arc<Vec<u8>>, pattern: Vec<u8>) -> SearchState {
-    let results = Arc::new(Mutex::new(Vec::new()));
-    let done = Arc::new(Mutex::new(false));
-
-    let results_clone = results.clone();
-    let done_clone = done.clone();
+    let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
         let variations = generate_variations(&pattern);
+        let mut results = Vec::new();
         for (var_pattern, var_type) in variations {
             let offsets = find_all(&data, &var_pattern);
-            let mut res = results_clone.lock().unwrap();
             for offset in offsets {
-                res.push(SearchMatch {
+                results.push(SearchMatch {
                     offset,
                     variation: var_type.clone(),
                 });
             }
         }
-        // Sort by offset
-        let mut res = results_clone.lock().unwrap();
-        res.sort_by_key(|m| m.offset);
-        *done_clone.lock().unwrap() = true;
+        results.sort_by_key(|m| m.offset);
+        let _ = tx.send(results);
     });
 
-    SearchState { results, done }
+    SearchState { rx }
 }

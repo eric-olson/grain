@@ -1,6 +1,17 @@
-use memmap2::Mmap;
 use std::fs::File;
 use std::path::PathBuf;
+
+use memmap2::Mmap;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum FileError {
+    #[error("Failed to open file: {0}")]
+    Open(#[from] std::io::Error),
+
+    #[error("Failed to mmap file: {0}")]
+    Mmap(std::io::Error),
+}
 
 pub struct MappedFile {
     mmap: Mmap,
@@ -8,9 +19,12 @@ pub struct MappedFile {
 }
 
 impl MappedFile {
-    pub fn open(path: PathBuf) -> Result<Self, String> {
-        let file = File::open(&path).map_err(|e| format!("Failed to open file: {e}"))?;
-        let mmap = unsafe { Mmap::map(&file) }.map_err(|e| format!("Failed to mmap file: {e}"))?;
+    pub fn open(path: PathBuf) -> Result<Self, FileError> {
+        let file = File::open(&path)?;
+        // SAFETY: The file is opened read-only and we hold no mutable references.
+        // The mapping may become invalid if the file is truncated externally,
+        // but that is an accepted risk for this use case.
+        let mmap = unsafe { Mmap::map(&file) }.map_err(FileError::Mmap)?;
         Ok(Self { mmap, path })
     }
 

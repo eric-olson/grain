@@ -1,11 +1,40 @@
+use std::collections::HashSet;
+
 use eframe::egui;
-use egui::{ColorImage, TextureHandle, TextureOptions};
+use egui::{ColorImage, TextureHandle, TextureOptions, Vec2};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayMode {
+    Byte,
+    Bit,
+}
+
+impl DisplayMode {
+    /// How many pixels one byte produces.
+    pub fn pixels_per_byte(self) -> usize {
+        match self {
+            DisplayMode::Byte => 1,
+            DisplayMode::Bit => 8,
+        }
+    }
+
+    /// How many bytes are needed to fill `pixel_count` pixels.
+    pub fn bytes_for_pixels(self, pixel_count: usize) -> usize {
+        match self {
+            DisplayMode::Byte => pixel_count,
+            DisplayMode::Bit => pixel_count.div_ceil(8),
+        }
+    }
+}
 
 pub struct PixelGridViewer {
     texture: Option<TextureHandle>,
     last_offset: usize,
     last_stride: usize,
     last_data_len: usize,
+    last_zoom: u32,
+    last_highlight_count: usize,
+    last_mode: Option<DisplayMode>,
 }
 
 impl Default for PixelGridViewer {
@@ -15,6 +44,9 @@ impl Default for PixelGridViewer {
             last_offset: usize::MAX,
             last_stride: 0,
             last_data_len: 0,
+            last_zoom: 0,
+            last_highlight_count: 0,
+            last_mode: None,
         }
     }
 }
@@ -24,7 +56,13 @@ impl PixelGridViewer {
         self.last_offset = usize::MAX;
     }
 
-    /// Show the pixel grid. Returns the number of rows displayed.
+    /// Show the pixel grid. Returns (`visible_rows`, `image_rect`).
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss
+    )]
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -32,38 +70,71 @@ impl PixelGridViewer {
         stride: usize,
         offset: usize,
         viewport_height: f32,
-    ) -> usize {
+        zoom: f32,
+        highlights: &HashSet<usize>,
+        mode: DisplayMode,
+    ) -> (usize, egui::Rect) {
         if stride == 0 || data.is_empty() {
             ui.label("No data to display");
-            return 0;
+            return (0, egui::Rect::NOTHING);
         }
 
-        let rows = (data.len() + stride - 1) / stride;
-        let visible_rows = ((viewport_height / 1.0).ceil() as usize).min(rows);
+        let total_pixels = data.len() * mode.pixels_per_byte();
+        let rows = total_pixels.div_ceil(stride);
+        let visible_rows = ((viewport_height / zoom).ceil() as usize).min(rows);
+        let zoom_bits = zoom.to_bits();
 
         let needs_update = self.last_offset != offset
             || self.last_stride != stride
-            || self.last_data_len != data.len();
+            || self.last_data_len != data.len()
+            || self.last_zoom != zoom_bits
+            || self.last_highlight_count != highlights.len()
+            || self.last_mode != Some(mode);
 
         if needs_update || self.texture.is_none() {
-            let image = build_grayscale_image(data, stride, visible_rows);
-            let texture = ui.ctx().load_texture("pixel_grid", image, TextureOptions::NEAREST);
+            let image = build_image(data, stride, visible_rows, highlights, mode);
+            let texture = ui
+                .ctx()
+                .load_texture("pixel_grid", image, TextureOptions::NEAREST);
             self.texture = Some(texture);
             self.last_offset = offset;
             self.last_stride = stride;
             self.last_data_len = data.len();
+            self.last_zoom = zoom_bits;
+            self.last_highlight_count = highlights.len();
+            self.last_mode = Some(mode);
         }
 
+        let mut image_rect = egui::Rect::NOTHING;
         if let Some(tex) = &self.texture {
-            let size = tex.size_vec2();
-            ui.image(egui::load::SizedTexture::new(tex.id(), size));
+            let display_size = Vec2::new(stride as f32 * zoom, visible_rows as f32 * zoom);
+            let response = ui.image(egui::load::SizedTexture::new(tex.id(), display_size));
+            image_rect = response.rect;
         }
 
-        visible_rows
+        (visible_rows, image_rect)
     }
 }
 
-fn build_grayscale_image(data: &[u8], stride: usize, max_rows: usize) -> ColorImage {
+fn build_image(
+    data: &[u8],
+    stride: usize,
+    max_rows: usize,
+    highlights: &HashSet<usize>,
+    mode: DisplayMode,
+) -> ColorImage {
+    match mode {
+        DisplayMode::Byte => build_byte_image(data, stride, max_rows, highlights),
+        DisplayMode::Bit => build_bit_image(data, stride, max_rows, highlights),
+    }
+}
+
+fn build_byte_image(
+    data: &[u8],
+    stride: usize,
+    max_rows: usize,
+    highlights: &HashSet<usize>,
+) -> ColorImage {
     let width = stride;
     let height = max_rows;
     let mut pixels = Vec::with_capacity(width * height);
@@ -72,12 +143,80 @@ fn build_grayscale_image(data: &[u8], stride: usize, max_rows: usize) -> ColorIm
         for col in 0..width {
             let idx = row * stride + col;
             let val = if idx < data.len() { data[idx] } else { 0 };
-            pixels.push(egui::Color32::from_gray(val));
+            let color = if highlights.contains(&idx) {
+                egui::Color32::from_rgb(255, 60 + val / 2, 0)
+            } else {
+                let is_border = [
+                    idx.wrapping_sub(1),
+                    idx + 1,
+                    idx.wrapping_sub(stride),
+                    idx + stride,
+                ]
+                .iter()
+                .any(|&n| highlights.contains(&n));
+                if is_border {
+                    egui::Color32::from_rgb(255, 0, 0)
+                } else {
+                    egui::Color32::from_gray(val)
+                }
+            };
+            pixels.push(color);
         }
     }
 
     ColorImage {
         size: [width, height],
         pixels,
+        source_size: egui::Vec2::new(width as f32, height as f32),
+    }
+}
+
+fn build_bit_image(
+    data: &[u8],
+    stride: usize,
+    max_rows: usize,
+    highlights: &HashSet<usize>,
+) -> ColorImage {
+    let width = stride;
+    let height = max_rows;
+    let total_bits = data.len() * 8;
+    let mut pixels = Vec::with_capacity(width * height);
+
+    for row in 0..height {
+        for col in 0..width {
+            let bit_idx = row * stride + col;
+            let val = if bit_idx < total_bits {
+                let byte_idx = bit_idx / 8;
+                let bit_pos = 7 - (bit_idx % 8); // MSB first
+                (data[byte_idx] >> bit_pos) & 1
+            } else {
+                0
+            };
+            let gray = if val == 1 { 255u8 } else { 0u8 };
+            let color = if highlights.contains(&bit_idx) {
+                egui::Color32::from_rgb(255, if val == 1 { 180 } else { 60 }, 0)
+            } else {
+                let is_border = [
+                    bit_idx.wrapping_sub(1),
+                    bit_idx + 1,
+                    bit_idx.wrapping_sub(stride),
+                    bit_idx + stride,
+                ]
+                .iter()
+                .any(|&n| highlights.contains(&n));
+                if is_border {
+                    egui::Color32::from_rgb(255, 0, 0)
+                } else {
+                    egui::Color32::from_gray(gray)
+                }
+            };
+            pixels.push(color);
+        }
+    }
+
+    ColorImage {
+        size: [width, height],
+        pixels,
+        source_size: egui::Vec2::new(width as f32, height as f32),
     }
 }
