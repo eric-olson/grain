@@ -47,10 +47,6 @@ The `testdata/` directory contains sample binary files. Generate them with:
 python testdata/generate.py
 ```
 
-## Architecture
-
-See [design.md](design.md) for the full architectural vision, including planned features like annotations, a processing pipeline, custom decoders, and a DSL.
-
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
