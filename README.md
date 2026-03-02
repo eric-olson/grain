@@ -8,7 +8,7 @@ The primary use case is satellite data reverse-engineering — figuring out fram
 
 - **2D pixel grid visualization** — view binary data as a colored image with configurable row width (stride). When the stride matches the frame length, patterns snap into aligned columns.
 - **Byte and bit display modes** — grayscale byte-level view (0x00 = black, 0xFF = white) or black/white bit-level view for non-byte-aligned protocols.
-- **Stride detection** — autocorrelation-based analysis that finds statistically significant periodicities in the data, suggesting likely frame lengths.
+- **Stride detection** — byte/bit-match periodicity analysis that finds statistically significant frame lengths by counting exact matches at each candidate lag and scoring with z-statistics.
 - **Sync word search** — search for hex patterns with automatic variation generation (bit-inverted, bit-reversed, byte-swapped) to find sync markers regardless of encoding quirks.
 - **Memory-mapped file access** — uses `memmap2` to avoid reading entire files upfront.
 - **Viewport rendering** — only the visible region is processed and rendered.

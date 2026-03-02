@@ -22,7 +22,7 @@ Rust GUI application for visualizing binary files, built for satellite radio dat
 - **`app.rs`** — Core state machine implementing `eframe::App`. Owns all UI layout: menu bar, status bar, hex panel, search panel, viewport, and stride detection dialog. Manages background task polling each frame.
 - **`file_handler.rs`** — `MappedFile` wrapper around `memmap2::Mmap`. Provides `get_range()` for bounded slice access.
 - **`viewer.rs`** — `PixelGridViewer` renders binary data as a 2D pixel grid. Two display modes: Byte (grayscale) and Bit (B/W per bit). Builds a `ColorImage` on CPU, uploads as an egui texture, and caches until state changes.
-- **`stride_detect.rs`** — Autocorrelation-based stride detection. Compares `data[i] == data[i+stride]` across candidates, uses z-scores to find statistically significant periodicities. Supports both byte and bit modes.
+- **`stride_detect.rs`** — Stride detection via byte/bit-match periodicity. Counts exact matches (`data[i] == data[i+stride]`) across candidate lags, uses z-scores to find statistically significant periodicities, and filters harmonics to prefer fundamental frequencies. Supports both byte and bit modes.
 - **`sync_search.rs`** — Hex pattern search with automatic variation generation (bit-inverted, bit-reversed, byte-swapped). Linear scan.
 
 ### Key Patterns
