@@ -109,4 +109,13 @@ print(f"    2500 frames at stride=400, set stride to 400 to see alignment")
 half = 32768
 write("bit_boundary_64k.bin", b"\x55" * half + b"\xAA" * half)
 
+# 15. Large file with frame sync markers
+frame_sync = bytes([0x1A, 0xCF, 0xFC, 0x1D])
+frame_count = 700000
+frames = bytearray()
+for i in range(frame_count):
+    payload = bytes(random.getrandbits(8) for _ in range(1496))
+    frames.extend(frame_sync + payload)
+write("frames_stride1500_1gb.bin", bytes(frames))
+
 print("\nDone! Files in:", OUT)
