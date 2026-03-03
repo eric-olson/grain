@@ -2,6 +2,8 @@ mod app;
 mod file_handler;
 mod stride_detect;
 mod sync_search;
+mod types;
+mod ui;
 mod viewer;
 
 fn main() -> eframe::Result<()> {
