@@ -1,6 +1,7 @@
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::Arc;
 use std::thread;
+
+use crate::file_handler::MappedFile;
 
 use thiserror::Error;
 
@@ -115,14 +116,14 @@ fn find_all(data: &[u8], pattern: &[u8]) -> Vec<usize> {
 }
 
 /// Launch a background search. Returns a [`SearchState`] to poll for results.
-pub fn search_background(data: Arc<Vec<u8>>, pattern: Vec<u8>) -> SearchState {
+pub fn search_background(data: MappedFile, pattern: Vec<u8>) -> SearchState {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
         let variations = generate_variations(&pattern);
         let mut results = Vec::new();
         for (var_pattern, var_type) in variations {
-            let offsets = find_all(&data, &var_pattern);
+            let offsets = find_all(data.data(), &var_pattern);
             for offset in offsets {
                 results.push(SearchMatch {
                     offset,

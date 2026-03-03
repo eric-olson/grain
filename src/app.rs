@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::fmt;
-use std::sync::Arc;
 
 use eframe::egui;
 
@@ -125,8 +124,6 @@ pub struct App {
     inspect_type: InspectType,
     /// Horizontal pixel offset to scroll to on next frame (from jump-to-match)
     h_scroll_target: Option<f32>,
-    // Cached copy for background tasks
-    file_data_cache: Option<Arc<Vec<u8>>>,
 
     selection: Option<Selection>,
     /// Anchor byte offset for drag selection (set on mouse-down)
@@ -150,7 +147,6 @@ impl Default for App {
             show_inspector: true,
             inspect_type: InspectType::U8,
             h_scroll_target: None,
-            file_data_cache: None,
             selection: None,
             drag_anchor: None,
             search: SearchPanel::default(),
@@ -164,7 +160,6 @@ impl App {
         if let Some(path) = rfd::FileDialog::new().pick_file() {
             match MappedFile::open(path) {
                 Ok(mf) => {
-                    self.file_data_cache = Some(Arc::new(mf.data().to_vec()));
                     self.file = Some(mf);
                     self.scroll_offset = 0;
                     self.selection = None;
@@ -217,9 +212,9 @@ impl App {
             }
         };
 
-        if let Some(data) = &self.file_data_cache {
+        if let Some(file) = &self.file {
             self.search.pattern_len = pattern.len();
-            self.search.state = Some(sync_search::search_background(data.clone(), pattern));
+            self.search.state = Some(sync_search::search_background(file.clone(), pattern));
         }
     }
 
@@ -600,11 +595,12 @@ impl eframe::App for App {
         // Inspector panel (above status bar)
         let mut clear_selection = false;
         if self.show_inspector {
-            if let (Some(sel), Some(data)) = (&self.selection, &self.file_data_cache) {
+            if let (Some(sel), Some(data)) = (&self.selection, &self.file) {
                 let sel_start = sel.start;
                 let sel_end = sel.end;
                 let sel_len = sel_end - sel_start + 1;
                 let sel_bytes: Vec<u8> = data
+                    .data()
                     .get(sel_start..=sel_end)
                     .map(|s| s.to_vec())
                     .unwrap_or_default();
@@ -733,12 +729,12 @@ impl eframe::App for App {
                     let detecting = self.stride_detect.state.is_some();
                     ui.add_enabled_ui(!detecting, |ui| {
                         if ui.button("Detect").clicked() {
-                            if let Some(data) = &self.file_data_cache {
+                            if let Some(file) = &self.file {
                                 self.stride_detect.candidates.clear();
                                 let bit_mode = self.display_mode == DisplayMode::Bit;
                                 self.stride_detect.state =
                                     Some(stride_detect::detect_stride_background(
-                                        data.clone(),
+                                        file.clone(),
                                         self.stride_detect.min,
                                         self.stride_detect.max,
                                         8,

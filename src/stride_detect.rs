@@ -1,6 +1,7 @@
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::Arc;
 use std::thread;
+
+use crate::file_handler::MappedFile;
 
 pub struct StrideDetectState {
     rx: Receiver<Vec<StrideCandidate>>,
@@ -31,7 +32,7 @@ pub struct StrideCandidate {
 /// When the stride matches a real frame length, sync words line up
 /// and produce a sharp spike in the match ratio.
 pub fn detect_stride_background(
-    data: Arc<Vec<u8>>,
+    data: MappedFile,
     min_stride: usize,
     max_stride: usize,
     num_results: usize,
@@ -41,9 +42,9 @@ pub fn detect_stride_background(
 
     thread::spawn(move || {
         let candidates = if bit_mode {
-            detect_stride_bits(&data, min_stride, max_stride, num_results)
+            detect_stride_bits(data.data(), min_stride, max_stride, num_results)
         } else {
-            detect_stride_bytes(&data, min_stride, max_stride, num_results)
+            detect_stride_bytes(data.data(), min_stride, max_stride, num_results)
         };
         let _ = tx.send(candidates);
     });

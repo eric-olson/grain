@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use memmap2::Mmap;
 use thiserror::Error;
@@ -13,9 +14,11 @@ pub enum FileError {
     Mmap(std::io::Error),
 }
 
+/// Memory-mapped file handle. Cheap to clone (Arc-backed).
+#[derive(Clone)]
 pub struct MappedFile {
-    mmap: Mmap,
-    path: PathBuf,
+    mmap: Arc<Mmap>,
+    path: Arc<PathBuf>,
 }
 
 impl MappedFile {
@@ -25,7 +28,10 @@ impl MappedFile {
         // The mapping may become invalid if the file is truncated externally,
         // but that is an accepted risk for this use case.
         let mmap = unsafe { Mmap::map(&file) }.map_err(FileError::Mmap)?;
-        Ok(Self { mmap, path })
+        Ok(Self {
+            mmap: Arc::new(mmap),
+            path: Arc::new(path),
+        })
     }
 
     pub fn len(&self) -> usize {
