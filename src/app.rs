@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fmt;
 use std::sync::Arc;
 
 use eframe::egui;
@@ -8,6 +9,61 @@ use crate::stride_detect::{self, StrideCandidate, StrideDetectState};
 use crate::sync_search::{self, SearchMatch, SearchState};
 use crate::viewer::{DisplayMode, PixelGridViewer};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InspectType {
+    U8,
+    I8,
+    U16,
+    I16,
+    U32,
+    I32,
+    U64,
+    I64,
+    F32,
+    F64,
+}
+
+impl InspectType {
+    pub const ALL: [InspectType; 10] = [
+        InspectType::U8,
+        InspectType::I8,
+        InspectType::U16,
+        InspectType::I16,
+        InspectType::U32,
+        InspectType::I32,
+        InspectType::U64,
+        InspectType::I64,
+        InspectType::F32,
+        InspectType::F64,
+    ];
+
+    pub fn byte_size(self) -> usize {
+        match self {
+            InspectType::U8 | InspectType::I8 => 1,
+            InspectType::U16 | InspectType::I16 => 2,
+            InspectType::U32 | InspectType::I32 | InspectType::F32 => 4,
+            InspectType::U64 | InspectType::I64 | InspectType::F64 => 8,
+        }
+    }
+}
+
+impl fmt::Display for InspectType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InspectType::U8 => write!(f, "u8"),
+            InspectType::I8 => write!(f, "i8"),
+            InspectType::U16 => write!(f, "u16"),
+            InspectType::I16 => write!(f, "i16"),
+            InspectType::U32 => write!(f, "u32"),
+            InspectType::I32 => write!(f, "i32"),
+            InspectType::U64 => write!(f, "u64"),
+            InspectType::I64 => write!(f, "i64"),
+            InspectType::F32 => write!(f, "f32"),
+            InspectType::F64 => write!(f, "f64"),
+        }
+    }
+}
+
 /// Info about the pixel under the cursor.
 pub struct CursorInfo {
     pub file_offset: usize,
@@ -15,6 +71,13 @@ pub struct CursorInfo {
     pub row: usize,
     pub col: usize,
     pub bit_index: Option<usize>, // bit within byte (0=MSB) in bit mode
+}
+
+/// A byte-range selection in the file.
+#[derive(Clone, Copy)]
+pub struct Selection {
+    pub start: usize,
+    pub end: usize, // inclusive
 }
 
 /// Search-related state grouped together.
@@ -58,10 +121,16 @@ pub struct App {
     viewer: PixelGridViewer,
     cursor_info: Option<CursorInfo>,
     show_hex_panel: bool,
+    show_inspector: bool,
+    inspect_type: InspectType,
     /// Horizontal pixel offset to scroll to on next frame (from jump-to-match)
     h_scroll_target: Option<f32>,
     // Cached copy for background tasks
     file_data_cache: Option<Arc<Vec<u8>>>,
+
+    selection: Option<Selection>,
+    /// Anchor byte offset for drag selection (set on mouse-down)
+    drag_anchor: Option<usize>,
 
     search: SearchPanel,
     stride_detect: StrideDetect,
@@ -78,8 +147,12 @@ impl Default for App {
             viewer: PixelGridViewer::default(),
             cursor_info: None,
             show_hex_panel: false,
+            show_inspector: true,
+            inspect_type: InspectType::U8,
             h_scroll_target: None,
             file_data_cache: None,
+            selection: None,
+            drag_anchor: None,
             search: SearchPanel::default(),
             stride_detect: StrideDetect::default(),
         }
@@ -94,6 +167,8 @@ impl App {
                     self.file_data_cache = Some(Arc::new(mf.data().to_vec()));
                     self.file = Some(mf);
                     self.scroll_offset = 0;
+                    self.selection = None;
+                    self.drag_anchor = None;
                     self.viewer.invalidate();
                     self.search.state = None;
                     self.search.results.clear();
@@ -151,6 +226,237 @@ impl App {
     fn max_offset(&self) -> usize {
         self.file.as_ref().map_or(0, |f| f.len().saturating_sub(1))
     }
+
+    /// Convert a pointer position over the image rect to a file byte offset.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    fn pos_to_file_offset(
+        pos: egui::Pos2,
+        image_rect: egui::Rect,
+        zoom: f32,
+        stride: usize,
+        scroll_offset: usize,
+        data_len: usize,
+        mode: DisplayMode,
+    ) -> Option<usize> {
+        let rel = pos - image_rect.min;
+        let px_col = (rel.x / zoom) as usize;
+        let px_row = (rel.y / zoom) as usize;
+        if px_col >= stride {
+            return None;
+        }
+        let pixel_index = px_row * stride + px_col;
+        let ppb = mode.pixels_per_byte();
+        let byte_index_in_view = pixel_index / ppb;
+        if byte_index_in_view >= data_len {
+            return None;
+        }
+        Some(scroll_offset + byte_index_in_view)
+    }
+
+    fn copy_button(ui: &mut egui::Ui, text: &str) {
+        if ui.small_button("\u{1f4cb}").on_hover_text("Copy").clicked() {
+            ui.ctx().copy_text(text.to_string());
+        }
+    }
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_precision_loss
+    )]
+    fn draw_inspector(
+        ui: &mut egui::Ui,
+        sel_start: usize,
+        sel_end: usize,
+        sel_len: usize,
+        bytes: &[u8],
+        inspect_type: InspectType,
+    ) {
+        if bytes.is_empty() {
+            return;
+        }
+
+        egui::Grid::new("inspector_grid")
+            .num_columns(3)
+            .striped(true)
+            .show(ui, |ui| {
+                // Range
+                let range_str = format!(
+                    "0x{sel_start:08X}..0x{sel_end:08X} ({sel_len} byte{})",
+                    if sel_len == 1 { "" } else { "s" }
+                );
+                ui.label("Range:");
+                ui.monospace(&range_str);
+                Self::copy_button(ui, &range_str);
+                ui.end_row();
+
+                // Hex dump (capped display)
+                let hex_str: String = bytes
+                    .iter()
+                    .take(64)
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let hex_display = if sel_len > 64 {
+                    format!("{hex_str} …({} more)", sel_len - 64)
+                } else {
+                    hex_str.clone()
+                };
+                let hex_full: String = bytes
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                ui.label("Hex:");
+                ui.monospace(&hex_display);
+                Self::copy_button(ui, &hex_full);
+                ui.end_row();
+
+                // Type-specific interpretation (single value or array)
+                let needed = inspect_type.byte_size();
+                if sel_len < needed {
+                    ui.label(format!("{inspect_type}:"));
+                    ui.monospace(format!("(select {needed} bytes)"));
+                    ui.label("");
+                    ui.end_row();
+                } else {
+                    let count = sel_len / needed;
+                    let chunks: Vec<&[u8]> = bytes[..count * needed].chunks_exact(needed).collect();
+
+                    // Helper: format one chunk as "BE / LE" for the given type
+                    let format_chunk = |c: &[u8]| -> (String, String) {
+                        match inspect_type {
+                            InspectType::U8 => {
+                                let v = format!("{}", c[0]);
+                                (v.clone(), v)
+                            }
+                            InspectType::I8 => {
+                                let v = format!("{}", c[0] as i8);
+                                (v.clone(), v)
+                            }
+                            InspectType::U16 => {
+                                let be = u16::from_be_bytes([c[0], c[1]]);
+                                let le = u16::from_le_bytes([c[0], c[1]]);
+                                (format!("{be}"), format!("{le}"))
+                            }
+                            InspectType::I16 => {
+                                let be = i16::from_be_bytes([c[0], c[1]]);
+                                let le = i16::from_le_bytes([c[0], c[1]]);
+                                (format!("{be}"), format!("{le}"))
+                            }
+                            InspectType::U32 => {
+                                let be = u32::from_be_bytes([c[0], c[1], c[2], c[3]]);
+                                let le = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+                                (format!("{be}"), format!("{le}"))
+                            }
+                            InspectType::I32 => {
+                                let be = i32::from_be_bytes([c[0], c[1], c[2], c[3]]);
+                                let le = i32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+                                (format!("{be}"), format!("{le}"))
+                            }
+                            InspectType::U64 => {
+                                let mut a = [0u8; 8]; a.copy_from_slice(c);
+                                let be = u64::from_be_bytes(a);
+                                let le = u64::from_le_bytes(a);
+                                (format!("{be}"), format!("{le}"))
+                            }
+                            InspectType::I64 => {
+                                let mut a = [0u8; 8]; a.copy_from_slice(c);
+                                let be = i64::from_be_bytes(a);
+                                let le = i64::from_le_bytes(a);
+                                (format!("{be}"), format!("{le}"))
+                            }
+                            InspectType::F32 => {
+                                let be = f32::from_be_bytes([c[0], c[1], c[2], c[3]]);
+                                let le = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+                                (format!("{be}"), format!("{le}"))
+                            }
+                            InspectType::F64 => {
+                                let mut a = [0u8; 8]; a.copy_from_slice(c);
+                                let be = f64::from_be_bytes(a);
+                                let le = f64::from_le_bytes(a);
+                                (format!("{be}"), format!("{le}"))
+                            }
+                        }
+                    };
+
+                    let is_single_byte = needed == 1;
+
+                    if count == 1 {
+                        // Single value
+                        let (be_str, le_str) = format_chunk(chunks[0]);
+                        if is_single_byte {
+                            ui.label(format!("{inspect_type}:"));
+                            ui.monospace(&be_str);
+                            Self::copy_button(ui, &be_str);
+                        } else {
+                            ui.label(format!("{inspect_type} BE / LE:"));
+                            ui.monospace(format!("{be_str} / {le_str}"));
+                            Self::copy_button(ui, &format!("BE:{be_str} LE:{le_str}"));
+                        }
+                        ui.end_row();
+                    } else {
+                        // Array display
+                        let cap = 64usize; // max elements to display
+
+                        if is_single_byte {
+                            let vals: Vec<String> = chunks.iter().take(cap).map(|c| format_chunk(c).0).collect();
+                            let arr_str = format!("[{}]", vals.join(", "));
+                            let suffix = if count > cap { format!(" …({} more)", count - cap) } else { String::new() };
+                            ui.label(format!("[{inspect_type}; {count}]:"));
+                            ui.monospace(format!("{arr_str}{suffix}"));
+                            let full: Vec<String> = chunks.iter().map(|c| format_chunk(c).0).collect();
+                            Self::copy_button(ui, &format!("[{}]", full.join(", ")));
+                            ui.end_row();
+                        } else {
+                            let be_vals: Vec<String> = chunks.iter().take(cap).map(|c| format_chunk(c).0).collect();
+                            let le_vals: Vec<String> = chunks.iter().take(cap).map(|c| format_chunk(c).1).collect();
+                            let be_arr = format!("[{}]", be_vals.join(", "));
+                            let le_arr = format!("[{}]", le_vals.join(", "));
+                            let suffix = if count > cap { format!(" …({} more)", count - cap) } else { String::new() };
+
+                            ui.label(format!("[{inspect_type}; {count}] BE:"));
+                            ui.monospace(format!("{be_arr}{suffix}"));
+                            let full_be: Vec<String> = chunks.iter().map(|c| format_chunk(c).0).collect();
+                            Self::copy_button(ui, &format!("[{}]", full_be.join(", ")));
+                            ui.end_row();
+
+                            ui.label(format!("[{inspect_type}; {count}] LE:"));
+                            ui.monospace(format!("{le_arr}{suffix}"));
+                            let full_le: Vec<String> = chunks.iter().map(|c| format_chunk(c).1).collect();
+                            Self::copy_button(ui, &format!("[{}]", full_le.join(", ")));
+                            ui.end_row();
+                        }
+                    }
+                }
+
+                // ASCII
+                let ascii: String = bytes
+                    .iter()
+                    .take(128)
+                    .map(|&b| {
+                        if b.is_ascii_graphic() || b == b' ' {
+                            b as char
+                        } else {
+                            '.'
+                        }
+                    })
+                    .collect();
+                let ascii_display = if sel_len > 128 {
+                    format!("{ascii}…")
+                } else {
+                    ascii.clone()
+                };
+                ui.label("ASCII:");
+                ui.monospace(&ascii_display);
+                Self::copy_button(ui, &ascii);
+                ui.end_row();
+            });
+    }
 }
 
 impl eframe::App for App {
@@ -168,6 +474,12 @@ impl eframe::App for App {
         // If a background task is running, keep repainting
         if self.search.state.is_some() || self.stride_detect.state.is_some() {
             ctx.request_repaint();
+        }
+
+        // Escape clears selection
+        if self.selection.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.selection = None;
+            self.viewer.invalidate();
         }
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
@@ -228,6 +540,21 @@ impl eframe::App for App {
                 if ui.selectable_label(self.show_hex_panel, "Hex").clicked() {
                     self.show_hex_panel = !self.show_hex_panel;
                 }
+                if ui.selectable_label(self.show_inspector, "Inspector").clicked() {
+                    self.show_inspector = !self.show_inspector;
+                }
+
+                ui.separator();
+
+                ui.label("Type:");
+                egui::ComboBox::from_id_salt("inspect_type")
+                    .selected_text(self.inspect_type.to_string())
+                    .width(50.0)
+                    .show_ui(ui, |ui| {
+                        for ty in InspectType::ALL {
+                            ui.selectable_value(&mut self.inspect_type, ty, ty.to_string());
+                        }
+                    });
 
                 ui.separator();
 
@@ -269,6 +596,40 @@ impl eframe::App for App {
                 }
             });
         });
+
+        // Inspector panel (above status bar)
+        let mut clear_selection = false;
+        if self.show_inspector {
+            if let (Some(sel), Some(data)) = (&self.selection, &self.file_data_cache) {
+                let sel_start = sel.start;
+                let sel_end = sel.end;
+                let sel_len = sel_end - sel_start + 1;
+                let sel_bytes: Vec<u8> = data
+                    .get(sel_start..=sel_end)
+                    .map(|s| s.to_vec())
+                    .unwrap_or_default();
+
+                egui::TopBottomPanel::bottom("inspector_panel")
+                    .max_height(200.0)
+                    .resizable(true)
+                    .show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.heading("Data Inspector");
+                            if ui.small_button("Clear").clicked() {
+                                clear_selection = true;
+                            }
+                        });
+                        let itype = self.inspect_type;
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            Self::draw_inspector(ui, sel_start, sel_end, sel_len, &sel_bytes, itype);
+                        });
+                    });
+            }
+        }
+        if clear_selection {
+            self.selection = None;
+            self.viewer.invalidate();
+        }
 
         // Search panel on the right
         egui::SidePanel::right("search_panel")
@@ -604,10 +965,8 @@ impl eframe::App for App {
                 for m in &self.search.results {
                     let match_end = m.offset + pat_len;
                     if match_end > view_start && m.offset < view_end {
-                        // Byte range within the local data
                         let local_byte_start = m.offset.saturating_sub(view_start);
                         let local_byte_end = (match_end - view_start).min(data_vec.len());
-                        // Convert to pixel range
                         let px_start = local_byte_start * ppb;
                         let px_end = (local_byte_end * ppb).min(total_local_pixels);
                         for i in px_start..px_end {
@@ -616,6 +975,26 @@ impl eframe::App for App {
                     }
                 }
                 set
+            } else {
+                HashSet::new()
+            };
+
+            // Build selection highlight set (local pixel indices)
+            let selection_highlights = if let Some(sel) = &self.selection {
+                let view_start = self.scroll_offset;
+                let view_end = view_start + data_vec.len();
+                let ppb = mode.pixels_per_byte();
+                let total_local_pixels = data_vec.len() * ppb;
+                let sel_end_excl = sel.end + 1;
+                if sel_end_excl > view_start && sel.start < view_end {
+                    let local_byte_start = sel.start.saturating_sub(view_start);
+                    let local_byte_end = (sel_end_excl - view_start).min(data_vec.len());
+                    let px_start = local_byte_start * ppb;
+                    let px_end = (local_byte_end * ppb).min(total_local_pixels);
+                    (px_start..px_end).collect::<HashSet<usize>>()
+                } else {
+                    HashSet::new()
+                }
             } else {
                 HashSet::new()
             };
@@ -660,8 +1039,9 @@ impl eframe::App for App {
                 scroll_area = scroll_area.horizontal_scroll_offset(target_x.max(0.0));
             }
             let mut image_rect = egui::Rect::NOTHING;
+            let mut grid_response: Option<egui::Response> = None;
             scroll_area.show(&mut grid_ui, |ui| {
-                let (_rows, rect) = self.viewer.show(
+                let (_rows, rect, resp) = self.viewer.show(
                     ui,
                     &data_vec,
                     stride,
@@ -669,10 +1049,75 @@ impl eframe::App for App {
                     viewport_height,
                     zoom,
                     &highlights,
+                    &selection_highlights,
                     mode,
                 );
                 image_rect = rect;
+                grid_response = Some(resp);
             });
+
+            // Handle mouse interaction for selection
+            if let Some(resp) = &grid_response {
+                if image_rect.is_positive() {
+                    // Drag started — set anchor using press origin (where mouse-down occurred)
+                    if resp.drag_started() {
+                        if let Some(origin) = ctx.input(|i| i.pointer.press_origin()) {
+                            if let Some(off) = Self::pos_to_file_offset(
+                                origin, image_rect, zoom, stride, scroll_offset,
+                                data_vec.len(), mode,
+                            ) {
+                                self.drag_anchor = Some(off);
+                                let type_size = self.inspect_type.byte_size();
+                                let end = (off + type_size - 1).min(scroll_offset + data_vec.len() - 1).min(self.max_offset());
+                                self.selection = Some(Selection { start: off, end });
+                                self.viewer.invalidate();
+                            }
+                        }
+                    }
+                    // Dragging — snap selection to type-size intervals
+                    if resp.dragged() {
+                        if let Some(anchor) = self.drag_anchor {
+                            if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
+                                if let Some(off) = Self::pos_to_file_offset(
+                                    pos, image_rect, zoom, stride, scroll_offset,
+                                    data_vec.len(), mode,
+                                ) {
+                                    let type_size = self.inspect_type.byte_size();
+                                    let start = anchor.min(off);
+                                    let end_raw = anchor.max(off);
+                                    // Extend end so the selection covers a whole number of elements
+                                    let span = end_raw - start + 1;
+                                    let count = span.div_ceil(type_size);
+                                    let end = (start + count * type_size - 1)
+                                        .min(scroll_offset + data_vec.len() - 1)
+                                        .min(self.max_offset());
+                                    self.selection = Some(Selection { start, end });
+                                    self.viewer.invalidate();
+                                }
+                            }
+                        }
+                    }
+                    // Click without drag — select inspect_type.byte_size() bytes
+                    if resp.clicked() {
+                        if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
+                            if let Some(off) = Self::pos_to_file_offset(
+                                pos, image_rect, zoom, stride, scroll_offset,
+                                data_vec.len(), mode,
+                            ) {
+                                let type_size = self.inspect_type.byte_size();
+                                let end = (off + type_size - 1).min(scroll_offset + data_vec.len() - 1).min(self.max_offset());
+                                self.selection = Some(Selection { start: off, end });
+                                self.drag_anchor = None;
+                                self.viewer.invalidate();
+                            }
+                        }
+                    }
+                    // Drag released
+                    if resp.drag_stopped() {
+                        self.drag_anchor = None;
+                    }
+                }
+            }
 
             // Cursor info from mouse position over the image
             self.cursor_info = None;
