@@ -1,8 +1,9 @@
 use eframe::egui;
 
 use crate::file_handler::MappedFile;
+use crate::pipeline::Pipeline;
 use crate::types::{CursorInfo, InspectType, Selection};
-use crate::ui::search_panel::{SearchPanel, SearchAction};
+use crate::ui::search_panel::{SearchAction, SearchPanel};
 use crate::ui::stride_dialog::StrideDialog;
 use crate::ui::viewport::Viewport;
 use crate::viewer::DisplayMode;
@@ -16,12 +17,14 @@ pub struct App {
     cursor_info: Option<CursorInfo>,
     show_hex_panel: bool,
     show_inspector: bool,
+    show_processor_panel: bool,
     inspect_type: InspectType,
     selection: Option<Selection>,
     // Panel state
     search: SearchPanel,
     stride_dialog: StrideDialog,
     viewport: Viewport,
+    pipeline: Pipeline,
 }
 
 impl Default for App {
@@ -35,11 +38,13 @@ impl Default for App {
             cursor_info: None,
             show_hex_panel: false,
             show_inspector: true,
+            show_processor_panel: false,
             inspect_type: InspectType::U8,
             selection: None,
             search: SearchPanel::default(),
             stride_dialog: StrideDialog::default(),
             viewport: Viewport::default(),
+            pipeline: Pipeline::new(),
         }
     }
 }
@@ -53,6 +58,7 @@ impl App {
                     self.scroll_offset = 0;
                     self.selection = None;
                     self.viewport.invalidate();
+                    self.pipeline.invalidate();
                     self.search.reset();
                 }
                 Err(e) => {
@@ -63,7 +69,13 @@ impl App {
     }
 
     fn max_offset(&self) -> usize {
-        self.file.as_ref().map_or(0, |f| f.len().saturating_sub(1))
+        self.file.as_ref().map_or(0, |f| {
+            if self.pipeline.is_active() {
+                self.pipeline.output_len(f.len()).saturating_sub(1)
+            } else {
+                f.len().saturating_sub(1)
+            }
+        })
     }
 }
 
@@ -95,6 +107,7 @@ impl eframe::App for App {
                 self.display_mode,
                 &mut self.show_hex_panel,
                 &mut self.show_inspector,
+                &mut self.show_processor_panel,
                 &mut self.inspect_type,
                 file_info_ref,
                 self.file.is_some(),
@@ -154,6 +167,15 @@ impl eframe::App for App {
             self.viewport.invalidate();
         }
 
+        // Processor panel
+        if self.show_processor_panel {
+            let panel_action = crate::ui::processor_panel::show(ctx, &mut self.pipeline);
+            if panel_action.changed {
+                self.pipeline.invalidate();
+                self.viewport.invalidate();
+            }
+        }
+
         // Hex panel
         if self.show_hex_panel {
             if let Some(file) = &self.file {
@@ -163,6 +185,7 @@ impl eframe::App for App {
         }
 
         // Central viewport
+        let max_offset = self.max_offset();
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.file.is_none() {
                 ui.centered_and_justified(|ui| {
@@ -172,10 +195,16 @@ impl eframe::App for App {
             }
 
             let file = self.file.as_ref().unwrap();
+            let pipeline = if self.pipeline.is_active() {
+                Some(&mut self.pipeline)
+            } else {
+                None
+            };
             let vp_resp = self.viewport.show(
                 ui,
                 ctx,
                 file,
+                pipeline,
                 self.stride,
                 self.scroll_offset,
                 self.zoom,
@@ -184,7 +213,7 @@ impl eframe::App for App {
                 self.search.results(),
                 self.search.pattern_len(),
                 &self.selection,
-                self.max_offset(),
+                max_offset,
             );
 
             // Apply viewport response

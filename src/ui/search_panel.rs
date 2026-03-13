@@ -19,11 +19,7 @@ pub struct SearchPanel {
 }
 
 impl SearchPanel {
-    pub fn show(
-        &mut self,
-        ctx: &egui::Context,
-        file: &Option<MappedFile>,
-    ) -> Option<SearchAction> {
+    pub fn show(&mut self, ctx: &egui::Context, file: &Option<MappedFile>) -> Option<SearchAction> {
         let mut action = None;
 
         egui::SidePanel::right("search_panel")
@@ -59,22 +55,17 @@ impl SearchPanel {
                 let row_height = ui.text_style_height(&egui::TextStyle::Body);
                 let num_results = self.results.len();
 
-                egui::ScrollArea::vertical().show_rows(
-                    ui,
-                    row_height,
-                    num_results,
-                    |ui, range| {
-                        for i in range {
-                            let m = &self.results[i];
-                            let label = format!("0x{:08X}  {}", m.offset, m.variation);
-                            if ui.selectable_label(false, &label).clicked() {
-                                action = Some(SearchAction {
-                                    jump_to_offset: m.offset,
-                                });
-                            }
+                egui::ScrollArea::vertical().show_rows(ui, row_height, num_results, |ui, range| {
+                    for i in range {
+                        let m = &self.results[i];
+                        let label = format!("0x{:08X}  {}", m.offset, m.variation);
+                        if ui.selectable_label(false, &label).clicked() {
+                            action = Some(SearchAction {
+                                jump_to_offset: m.offset,
+                            });
                         }
-                    },
-                );
+                    }
+                });
             });
 
         action

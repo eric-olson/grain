@@ -141,13 +141,15 @@ fn draw_inspector(
                             (format!("{be}"), format!("{le}"))
                         }
                         InspectType::U64 => {
-                            let mut a = [0u8; 8]; a.copy_from_slice(c);
+                            let mut a = [0u8; 8];
+                            a.copy_from_slice(c);
                             let be = u64::from_be_bytes(a);
                             let le = u64::from_le_bytes(a);
                             (format!("{be}"), format!("{le}"))
                         }
                         InspectType::I64 => {
-                            let mut a = [0u8; 8]; a.copy_from_slice(c);
+                            let mut a = [0u8; 8];
+                            a.copy_from_slice(c);
                             let be = i64::from_be_bytes(a);
                             let le = i64::from_le_bytes(a);
                             (format!("{be}"), format!("{le}"))
@@ -158,7 +160,8 @@ fn draw_inspector(
                             (format!("{be}"), format!("{le}"))
                         }
                         InspectType::F64 => {
-                            let mut a = [0u8; 8]; a.copy_from_slice(c);
+                            let mut a = [0u8; 8];
+                            a.copy_from_slice(c);
                             let be = f64::from_be_bytes(a);
                             let le = f64::from_le_bytes(a);
                             (format!("{be}"), format!("{le}"))
@@ -186,30 +189,43 @@ fn draw_inspector(
                     let cap = 64usize; // max elements to display
 
                     if is_single_byte {
-                        let vals: Vec<String> = chunks.iter().take(cap).map(|c| format_chunk(c).0).collect();
+                        let vals: Vec<String> =
+                            chunks.iter().take(cap).map(|c| format_chunk(c).0).collect();
                         let arr_str = format!("[{}]", vals.join(", "));
-                        let suffix = if count > cap { format!(" …({} more)", count - cap) } else { String::new() };
+                        let suffix = if count > cap {
+                            format!(" …({} more)", count - cap)
+                        } else {
+                            String::new()
+                        };
                         ui.label(format!("[{inspect_type}; {count}]:"));
                         ui.monospace(format!("{arr_str}{suffix}"));
                         let full: Vec<String> = chunks.iter().map(|c| format_chunk(c).0).collect();
                         copy_button(ui, &format!("[{}]", full.join(", ")));
                         ui.end_row();
                     } else {
-                        let be_vals: Vec<String> = chunks.iter().take(cap).map(|c| format_chunk(c).0).collect();
-                        let le_vals: Vec<String> = chunks.iter().take(cap).map(|c| format_chunk(c).1).collect();
+                        let be_vals: Vec<String> =
+                            chunks.iter().take(cap).map(|c| format_chunk(c).0).collect();
+                        let le_vals: Vec<String> =
+                            chunks.iter().take(cap).map(|c| format_chunk(c).1).collect();
                         let be_arr = format!("[{}]", be_vals.join(", "));
                         let le_arr = format!("[{}]", le_vals.join(", "));
-                        let suffix = if count > cap { format!(" …({} more)", count - cap) } else { String::new() };
+                        let suffix = if count > cap {
+                            format!(" …({} more)", count - cap)
+                        } else {
+                            String::new()
+                        };
 
                         ui.label(format!("[{inspect_type}; {count}] BE:"));
                         ui.monospace(format!("{be_arr}{suffix}"));
-                        let full_be: Vec<String> = chunks.iter().map(|c| format_chunk(c).0).collect();
+                        let full_be: Vec<String> =
+                            chunks.iter().map(|c| format_chunk(c).0).collect();
                         copy_button(ui, &format!("[{}]", full_be.join(", ")));
                         ui.end_row();
 
                         ui.label(format!("[{inspect_type}; {count}] LE:"));
                         ui.monospace(format!("{le_arr}{suffix}"));
-                        let full_le: Vec<String> = chunks.iter().map(|c| format_chunk(c).1).collect();
+                        let full_le: Vec<String> =
+                            chunks.iter().map(|c| format_chunk(c).1).collect();
                         copy_button(ui, &format!("[{}]", full_le.join(", ")));
                         ui.end_row();
                     }

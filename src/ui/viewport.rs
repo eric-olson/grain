@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use eframe::egui;
 
 use crate::file_handler::MappedFile;
+use crate::pipeline::Pipeline;
 use crate::sync_search::SearchMatch;
 use crate::types::{CursorInfo, InspectType, Selection};
 use crate::viewer::{DisplayMode, PixelGridViewer};
@@ -43,6 +44,7 @@ impl Viewport {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         file: &MappedFile,
+        mut pipeline: Option<&mut Pipeline>,
         stride: usize,
         scroll_offset: usize,
         zoom: f32,
@@ -60,7 +62,11 @@ impl Viewport {
             zoom: None,
         };
 
-        let file_len = file.len();
+        let file_len = if let Some(ref pipeline) = pipeline {
+            pipeline.output_len(file.len())
+        } else {
+            file.len()
+        };
         let viewport_height = ui.available_height();
         let mode = display_mode;
 
@@ -125,15 +131,25 @@ impl Viewport {
         let current_pixel = eff_scroll * mode.pixels_per_byte();
         let current_row = current_pixel / stride.max(1);
         ui.horizontal(|ui| {
-            ui.label(format!(
-                "Offset: 0x{:08X} ({}/{})  Row: {}/{}",
-                eff_scroll, eff_scroll, file_len, current_row, total_rows,
-            ));
+            if pipeline.is_some() {
+                ui.label(format!(
+                    "Output: 0x{:08X} ({}/{})  Row: {}/{}",
+                    eff_scroll, eff_scroll, file_len, current_row, total_rows,
+                ));
+            } else {
+                ui.label(format!(
+                    "Offset: 0x{:08X} ({}/{})  Row: {}/{}",
+                    eff_scroll, eff_scroll, file_len, current_row, total_rows,
+                ));
+            }
         });
 
         // Get data slice
-        let data = file.get_range(eff_scroll, visible_bytes);
-        let data_vec: Vec<u8> = data.to_vec();
+        let data_vec: Vec<u8> = if let Some(ref mut pipeline) = pipeline {
+            pipeline.get_range(file, eff_scroll, visible_bytes)
+        } else {
+            file.get_range(eff_scroll, visible_bytes).to_vec()
+        };
 
         // Build highlight set: local pixel indices within the visible data
         let highlights = if !search_results.is_empty() && pattern_len > 0 {
@@ -243,8 +259,13 @@ impl Viewport {
                 if grid_resp.drag_started() {
                     if let Some(origin) = ctx.input(|i| i.pointer.press_origin()) {
                         if let Some(off) = pos_to_file_offset(
-                            origin, image_rect, zoom, stride, eff_scroll,
-                            data_vec.len(), mode,
+                            origin,
+                            image_rect,
+                            zoom,
+                            stride,
+                            eff_scroll,
+                            data_vec.len(),
+                            mode,
                         ) {
                             self.drag_anchor = Some(off);
                             let type_size = inspect_type.byte_size();
@@ -260,8 +281,13 @@ impl Viewport {
                     if let Some(anchor) = self.drag_anchor {
                         if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
                             if let Some(off) = pos_to_file_offset(
-                                pos, image_rect, zoom, stride, eff_scroll,
-                                data_vec.len(), mode,
+                                pos,
+                                image_rect,
+                                zoom,
+                                stride,
+                                eff_scroll,
+                                data_vec.len(),
+                                mode,
                             ) {
                                 let type_size = inspect_type.byte_size();
                                 let start = anchor.min(off);
@@ -280,8 +306,13 @@ impl Viewport {
                 if grid_resp.clicked() {
                     if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
                         if let Some(off) = pos_to_file_offset(
-                            pos, image_rect, zoom, stride, eff_scroll,
-                            data_vec.len(), mode,
+                            pos,
+                            image_rect,
+                            zoom,
+                            stride,
+                            eff_scroll,
+                            data_vec.len(),
+                            mode,
                         ) {
                             let type_size = inspect_type.byte_size();
                             let end = (off + type_size - 1)

@@ -1,5 +1,6 @@
 mod app;
 mod file_handler;
+mod pipeline;
 mod stride_detect;
 mod sync_search;
 mod types;

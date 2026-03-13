@@ -11,7 +11,11 @@ pub struct MenuBarResponse {
     pub display_mode: Option<DisplayMode>,
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::too_many_arguments
+)]
 pub fn show(
     ui: &mut egui::Ui,
     stride: usize,
@@ -19,6 +23,7 @@ pub fn show(
     display_mode: DisplayMode,
     show_hex_panel: &mut bool,
     show_inspector: &mut bool,
+    show_processors: &mut bool,
     inspect_type: &mut InspectType,
     file_info: Option<(&str, usize)>,
     has_file: bool,
@@ -87,6 +92,12 @@ pub fn show(
         }
         if ui.selectable_label(*show_inspector, "Inspector").clicked() {
             *show_inspector = !*show_inspector;
+        }
+        if ui
+            .selectable_label(*show_processors, "Processors")
+            .clicked()
+        {
+            *show_processors = !*show_processors;
         }
 
         ui.separator();

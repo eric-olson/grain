@@ -161,11 +161,7 @@ fn build_byte_image(
             let color = if selection.contains(&idx) {
                 // Blue tint blended with data value
                 let v = val as u16;
-                egui::Color32::from_rgb(
-                    (40 + v / 4) as u8,
-                    (70 + v / 3) as u8,
-                    (130 + v / 2) as u8,
-                )
+                egui::Color32::from_rgb((40 + v / 4) as u8, (70 + v / 3) as u8, (130 + v / 2) as u8)
             } else if highlights.contains(&idx) {
                 egui::Color32::from_rgb(255, 60 + val / 2, 0)
             } else {
