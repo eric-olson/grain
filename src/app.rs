@@ -15,7 +15,6 @@ pub struct App {
     zoom: f32,
     display_mode: DisplayMode,
     cursor_info: Option<CursorInfo>,
-    show_hex_panel: bool,
     show_inspector: bool,
     show_processor_panel: bool,
     inspect_type: InspectType,
@@ -36,7 +35,6 @@ impl Default for App {
             zoom: 1.0,
             display_mode: DisplayMode::Byte,
             cursor_info: None,
-            show_hex_panel: false,
             show_inspector: true,
             show_processor_panel: false,
             inspect_type: InspectType::U8,
@@ -105,7 +103,6 @@ impl eframe::App for App {
                 self.stride,
                 self.zoom,
                 self.display_mode,
-                &mut self.show_hex_panel,
                 &mut self.show_inspector,
                 &mut self.show_processor_panel,
                 &mut self.inspect_type,
@@ -173,14 +170,6 @@ impl eframe::App for App {
             if panel_action.changed {
                 self.pipeline.invalidate();
                 self.viewport.invalidate();
-            }
-        }
-
-        // Hex panel
-        if self.show_hex_panel {
-            if let Some(file) = &self.file {
-                let cursor_offset = self.cursor_info.as_ref().map(|c| c.file_offset);
-                crate::ui::hex_panel::show(ctx, file, self.scroll_offset, cursor_offset);
             }
         }
 

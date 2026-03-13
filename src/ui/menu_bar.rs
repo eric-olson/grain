@@ -21,7 +21,6 @@ pub fn show(
     stride: usize,
     zoom: f32,
     display_mode: DisplayMode,
-    show_hex_panel: &mut bool,
     show_inspector: &mut bool,
     show_processors: &mut bool,
     inspect_type: &mut InspectType,
@@ -87,9 +86,6 @@ pub fn show(
 
         ui.separator();
 
-        if ui.selectable_label(*show_hex_panel, "Hex").clicked() {
-            *show_hex_panel = !*show_hex_panel;
-        }
         if ui.selectable_label(*show_inspector, "Inspector").clicked() {
             *show_inspector = !*show_inspector;
         }

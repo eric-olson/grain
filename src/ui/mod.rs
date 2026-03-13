@@ -1,4 +1,3 @@
-pub mod hex_panel;
 pub mod inspector;
 pub mod menu_bar;
 pub mod processor_panel;
