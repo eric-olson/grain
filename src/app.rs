@@ -137,7 +137,13 @@ impl eframe::App for App {
         // Inspector panel
         if self.show_inspector {
             if let (Some(sel), Some(file)) = (&self.selection, &self.file) {
-                if crate::ui::inspector::show(ctx, sel, file, self.inspect_type) {
+                let sel_len = sel.end - sel.start + 1;
+                let sel_bytes = if self.pipeline.is_active() {
+                    self.pipeline.get_range(file, sel.start, sel_len)
+                } else {
+                    file.get_range(sel.start, sel_len).to_vec()
+                };
+                if crate::ui::inspector::show(ctx, sel, &sel_bytes, self.inspect_type) {
                     self.selection = None;
                     self.viewport.invalidate();
                 }

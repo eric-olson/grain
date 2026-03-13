@@ -1,23 +1,18 @@
 use eframe::egui;
 
-use crate::file_handler::MappedFile;
 use crate::types::{InspectType, Selection};
 
 /// Show the inspector panel. Returns true if the "Clear" button was clicked.
+/// `sel_bytes` should already be fetched through the pipeline if one is active.
 pub fn show(
     ctx: &egui::Context,
     selection: &Selection,
-    file: &MappedFile,
+    sel_bytes: &[u8],
     inspect_type: InspectType,
 ) -> bool {
     let sel_start = selection.start;
     let sel_end = selection.end;
     let sel_len = sel_end - sel_start + 1;
-    let sel_bytes: Vec<u8> = file
-        .data()
-        .get(sel_start..=sel_end)
-        .map(|s| s.to_vec())
-        .unwrap_or_default();
 
     let mut clear_clicked = false;
 
@@ -32,7 +27,7 @@ pub fn show(
                 }
             });
             egui::ScrollArea::vertical().show(ui, |ui| {
-                draw_inspector(ui, sel_start, sel_end, sel_len, &sel_bytes, inspect_type);
+                draw_inspector(ui, sel_start, sel_end, sel_len, sel_bytes, inspect_type);
             });
         });
 
